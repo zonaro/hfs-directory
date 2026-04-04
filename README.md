@@ -1,0 +1,234 @@
+# hfs-directory
+
+A plugin for [Rejetto HFS](https://github.com/rejetto/hfs) that reads `.directory` files to customize folder icons in the web interface.
+
+## Overview
+
+This plugin allows you to customize the appearance of folders displayed in HFS frontend by creating simple `.directory` configuration files within each folder. You can:
+
+- **Use custom folder colors** by specifying a color name (e.g., `folder-green`, `folder-blue`)
+- **Use custom folder icons** by providing an absolute path to an image file (e.g., `/path/to/icon.ico`)
+- **Use HFS system icons** by specifying a known icon name (e.g., `folder`, `file`, `search`)
+
+## Syntax
+
+The `.directory` file uses an INI-like format with a `[Desktop Entry]` section:
+
+```ini
+[Desktop Entry]
+Icon=folder-green
+```
+
+or
+
+```ini
+[Desktop Entry]
+Icon=/absolute/path/to/custom-icon.png
+```
+
+### Supported Icon Values
+
+#### 1. Colored Folder Icons
+
+Prefix `folder-` with a color name to colorize the standard folder icon:
+
+```ini
+[Desktop Entry]
+Icon=folder-green
+```
+
+**Available colors:**
+- `folder-green` – Green folder
+- `folder-blue` – Blue folder
+- `folder-red` – Red folder
+- `folder-yellow` – Yellow folder
+- `folder-orange` – Orange folder
+- `folder-gray` – Gray folder
+- `folder-violet` – Violet folder
+- `folder-pink` – Pink folder
+
+#### 2. Custom Icon Files
+
+Use an absolute path to serve a local image file as the folder icon. The file must exist and have one of these extensions:
+
+- `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.ico`, `.bmp`, `.avif`
+
+Example:
+
+```ini
+[Desktop Entry]
+Icon=/home/user/icons/my-folder-icon.png
+```
+
+**Security note:** Icons are served through a secure, tokenized route. File access is limited to image files only.
+
+#### 3. System Icon Names
+
+Use any known HFS system icon name (though typically you'd use folder-based colors instead):
+
+```ini
+[Desktop Entry]
+Icon=folder
+```
+
+Common icon names: `folder`, `file`, `search`, `download`, `upload`, etc.
+
+## How It Works
+
+### Backend (plugin.js)
+
+1. **Reads `.directory` file** – When a folder is listed, the plugin looks for a `.directory` file in that folder
+2. **Parses the INI content** – Extracts the `Icon` value from the `[Desktop Entry]` section
+3. **Resolves the icon** – Based on the value:
+   - If it's a `folder-*` name → sets icon to "folder" + color metadata
+   - If it's an absolute path → validates and tokenizes it for secure serving
+   - Otherwise → uses the value as a system icon name
+4. **Caches the result** – Parsed values are cached per folder with a 30-second TTL to reduce I/O
+
+### Frontend (main.js + style.css)
+
+1. **Listens to `entryIcon` events** – The frontend event hook intercepts folder icon rendering
+2. **Applies color class** – If a color was set, wraps the icon with a CSS class
+3. **Renders with style** – The stylesheet applies the appropriate color to the folder icon
+
+## Installation
+
+1. Download or clone this plugin into your HFS plugins folder:
+   ```
+   ~/.hfs/plugins/hfs-directory/
+   ```
+
+2. Restart HFS or reload the plugin from the admin panel
+
+## Usage Example
+
+Create a `.directory` file in any folder you want to customize:
+
+```bash
+# Example folder structure
+my-project/
+├── .directory
+├── docs/
+│   ├── .directory
+│   └── README.md
+├── images/
+│   ├── .directory
+│   └── photo.jpg
+└── videos/
+    ├── .directory
+    └── video.mp4
+```
+
+**my-project/.directory:**
+```ini
+[Desktop Entry]
+Icon=folder-blue
+```
+
+**my-project/docs/.directory:**
+```ini
+[Desktop Entry]
+Icon=folder-green
+```
+
+**my-project/images/.directory:**
+```ini
+[Desktop Entry]
+Icon=/usr/share/icons/images-folder.png
+```
+
+**my-project/videos/.directory:**
+```ini
+[Desktop Entry]
+Icon=folder-violet
+```
+
+After creating these files, refresh the HFS web interface and the folders will display with their custom colors/icons.
+
+## Features
+
+- ✅ **No restart required** – Changes take effect immediately (within cache TTL)
+- ✅ **Lightweight** – Uses in-memory cache to minimize disk reads
+- ✅ **Secure** – Absolute icon paths are validated and served through a tokenized route
+- ✅ **Graceful fallback** – If `.directory` is missing or invalid, the default folder icon is used
+- ✅ **CSS-friendly** – Color classes are safe and don't interfere with other styles
+- ✅ **INI standard** – Uses the familiar `.directory` format from file managers
+
+## Security
+
+### Icon Path Validation
+
+When `Icon` points to an absolute path:
+
+- The file must exist on the filesystem
+- The file must have an allowed image extension (`.png`, `.jpg`, `.gif`, etc.)
+- File access is provided through a secure, single-use token
+- The token expires after 30 seconds
+
+### No Directory Traversal
+
+The plugin ensures that:
+
+- Only absolute paths to actual files are served
+- No relative paths like `../../etc/passwd` are allowed
+- Only image files are served (no `.txt`, `.sh`, etc.)
+
+## Performance
+
+### Caching
+
+- **TTL:** 30 seconds per folder
+- **In-memory storage:** Parsed `.directory` results are cached
+- **Auto-invalidation:** Cache expires automatically; no manual clearing needed
+- **Token cache:** Icon tokens are also time-limited
+
+### Scalability
+
+Even with hundreds of folders, the plugin performs efficiently:
+
+- First access: reads and parses `.directory`
+- Subsequent accesses (within 30s): instant cache hit
+- After TTL: refreshed on next list request
+
+## Troubleshooting
+
+### Icon doesn't appear
+
+1. Verify the `.directory` file exists in the correct folder
+2. Check that the `[Desktop Entry]` section is present
+3. Ensure the `Icon=` line has no leading spaces
+4. If using an absolute path, verify the file exists and is readable
+
+### Icon shows default folder icon
+
+This is the graceful fallback behavior. Possible causes:
+
+- `.directory` file is missing or unparseable
+- `Icon` value is empty or invalid
+- Absolute icon path doesn't exist or isn't an allowed image type
+
+Enable HFS logs to see error details.
+
+### Colored folder icon not showing
+
+1. Check that you're using the correct color name (e.g., `folder-green`, not just `green`)
+2. Ensure the frontend CSS was loaded (check browser console for style.css)
+3. Clear browser cache and refresh
+
+## API Version
+
+This plugin requires **HFS API version 12.97 or higher**.
+
+Check your HFS version in the admin panel under "System" > "Version".
+
+## License
+
+[Same as HFS](https://github.com/rejetto/hfs)
+
+## Contributing
+
+Found a bug or have a feature request? Please open an issue on GitHub.
+
+---
+
+**Happy customizing! 🎨**

@@ -1,0 +1,38 @@
+/*
+ * hfs-directory fixed folder color palette
+ */
+.hfs-directory-folder-icon .icon {
+    color: inherit;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-green {
+    color: #2e7d32;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-blue {
+    color: #1565c0;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-red {
+    color: #c62828;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-yellow {
+    color: #f9a825;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-orange {
+    color: #ef6c00;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-gray {
+    color: #546e7a;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-violet {
+    color: #6a1b9a;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-pink {
+    color: #ad1457;
+}
