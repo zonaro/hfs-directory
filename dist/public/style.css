@@ -44,3 +44,14 @@
 .hfs-directory-folder-icon.hfs-directory-color-git {
     color: #f05032;
 }
+
+/*
+ * Served file icons render as a real <img> (never an empty box):
+ * fixed height so every custom folder icon paints at the same size.
+ */
+.icon.hfs-directory-custom-icon {
+    height: 1.7em;
+    width: auto;
+    max-width: 2.4em;
+    object-fit: contain;
+}

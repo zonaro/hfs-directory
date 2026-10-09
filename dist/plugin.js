@@ -24,6 +24,7 @@ const child_process = require("child_process");
 const ICON_ROUTE = "/__hfs_directory_icon";
 const DIRECTORY_FILE_NAME = ".directory";
 const CACHE_TTL_MS = 30 * 1000;
+const ICON_TOKEN_TTL_MS = 10 * 60 * 1000;
 const GIO_TIMEOUT_MS = 2000;
 const GIO_ATTRIBUTES = "metadata::custom-icon,metadata::custom-icon-name";
 const SIDECAR_ENV_VAR = "HFS_DIRECTORY_CACHE";
@@ -64,7 +65,7 @@ let sidecarCache = null;
 const warnedPaths = new Set();
 
 exports.description = "Use Nautilus custom icons and .directory to customize folder icons";
-exports.version = 3;
+exports.version = 4;
 exports.apiRequired = 12.97;
 exports.frontend_js = "main.js";
 exports.frontend_css = "style.css";
@@ -132,7 +133,7 @@ function onDirEntry({ entry, node }) {
 
     if (iconPath) {
         const token = tokenFromPath(iconPath);
-        iconTokenCache.set(token, { iconPath, expiresAt: Date.now() + CACHE_TTL_MS });
+        iconTokenCache.set(token, { iconPath, expiresAt: Date.now() + ICON_TOKEN_TTL_MS });
         entry.icon = `${ICON_ROUTE}?t=${encodeURIComponent(token)}`;
         delete entry.hfsDirectoryColor;
         return;

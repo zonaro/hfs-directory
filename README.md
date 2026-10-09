@@ -129,8 +129,11 @@ Common icon names: `folder`, `file`, `search`, `download`, `upload`, etc.
 ### Frontend (main.js + style.css)
 
 1. **Listens to `entryIcon` events** – The frontend event hook intercepts folder icon rendering
-2. **Applies color class** – If a color was set, wraps the icon with a CSS class
-3. **Renders with style** – The stylesheet applies the appropriate color to the folder icon
+2. **File icons render as `<img>`** – Sidecar/absolute-path icons are real image elements with fixed height (HFS paints icon URLs as empty background spans, which can look like no icon) plus an error fallback to the default icon
+3. **Applies color class** – If a color was set, wraps the icon with a CSS class
+4. **Renders with style** – The stylesheet applies the appropriate color to the folder icon
+
+> **Coexistence:** HFS renders the output of *every* `entryIcon` handler. If another plugin (e.g. `emulatorJS-plugin` game covers) also returns an icon for folders, you'll see two icons — that plugin must render nothing when it has no cover instead of duplicating the default icon.
 
 ## Installation
 
