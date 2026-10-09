@@ -3,8 +3,10 @@
 /**
  * hfs-directory
  *
- * Reads `.directory` files from folders and customizes folder icons in HFS list.
- * Supported syntax:
+ * Reads Nautilus custom icons (GIO metadata) and `.directory` files from
+ * folders and customizes folder icons in HFS list.
+ * Hierarchy (first hit wins): Nautilus -> .directory -> default.
+ * Supported .directory syntax:
  * [Desktop Entry]
  * Icon=/absolute/path/to/icon.ico
  * Icon=folder-green
@@ -13,10 +15,13 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const child_process = require("child_process");
 
 const ICON_ROUTE = "/__hfs_directory_icon";
 const DIRECTORY_FILE_NAME = ".directory";
 const CACHE_TTL_MS = 30 * 1000;
+const GIO_TIMEOUT_MS = 2000;
+const GIO_ATTRIBUTES = "metadata::custom-icon,metadata::custom-icon-name";
 const ALLOWED_IMAGE_EXTENSIONS = new Set([
     ".png",
     ".jpg",
@@ -32,14 +37,21 @@ const ALLOWED_IMAGE_EXTENSIONS = new Set([
 let pluginApi;
 const pathTokenSecret = crypto.randomBytes(16).toString("hex");
 
+/**
+ * Cache for `gio` binary availability. `null` = unknown yet,
+ * `true` = usable, `false` = missing (skip future spawns).
+ * @type {boolean | null}
+ */
+let gioAvailable = null;
+
 /** @type {Map<string, { expiresAt: number, result: { icon: string | null, color: string | null, iconPath: string | null } }>} */
 const folderCache = new Map();
 
 /** @type {Map<string, { iconPath: string, expiresAt: number }>} */
 const iconTokenCache = new Map();
 
-exports.description = "Use .directory to customize folder icons";
-exports.version = 1;
+exports.description = "Use Nautilus custom icons and .directory to customize folder icons";
+exports.version = 2;
 exports.apiRequired = 12.97;
 exports.frontend_js = "main.js";
 exports.frontend_css = "style.css";
@@ -96,7 +108,7 @@ function middleware(ctx) {
 }
 
 /**
- * Customize folder entry icon by reading child-folder `.directory`.
+ * Customize folder entry icon with hierarchy: Nautilus -> `.directory` -> default.
  * @param {{ entry: any, node?: { source?: string } }} args
  */
 function onDirEntry({ entry, node }) {
@@ -130,10 +142,11 @@ function onDirEntry({ entry, node }) {
 function unload() {
     folderCache.clear();
     iconTokenCache.clear();
+    gioAvailable = null;
 }
 
 /**
- * Read (or cache-hit) `.directory` for a folder.
+ * Read (or cache-hit) folder icon with hierarchy: Nautilus -> .directory -> default.
  * @param {string} folderPath
  * @returns {{ icon: string | null, color: string | null, iconPath: string | null }}
  */
@@ -142,9 +155,107 @@ function getFolderIconDescriptor(folderPath) {
     const cached = folderCache.get(folderPath);
     if (cached && cached.expiresAt > now) return cached.result;
 
-    const result = parseDirectoryFile(path.join(folderPath, DIRECTORY_FILE_NAME));
+    const result = getNautilusIconDescriptor(folderPath) || parseDirectoryFile(path.join(folderPath, DIRECTORY_FILE_NAME));
     folderCache.set(folderPath, { result, expiresAt: now + CACHE_TTL_MS });
     return result;
+}
+
+/**
+ * Read Nautilus custom icon from GIO metadata (`gio info`).
+ * Returns a descriptor on hit, or null to fall through to `.directory`.
+ * @param {string} folderPath
+ * @returns {{ icon: string | null, color: string | null, iconPath: string | null } | null}
+ */
+function getNautilusIconDescriptor(folderPath) {
+    if (gioAvailable === false) return null;
+
+    let stdout = "";
+    try {
+        const res = child_process.spawnSync(
+            "gio",
+            ["info", "-a", GIO_ATTRIBUTES, "--", folderPath],
+            { encoding: "utf8", timeout: GIO_TIMEOUT_MS },
+        );
+        if (res.error) {
+            if (res.error.code === "ENOENT") gioAvailable = false;
+            return null;
+        }
+        if (res.status !== 0 || typeof res.stdout !== "string") return null;
+        gioAvailable = true;
+        stdout = res.stdout;
+    } catch {
+        return null;
+    }
+
+    const { customIcon, customIconName } = parseGioInfoMetadata(stdout);
+
+    if (customIcon) {
+        const localPath = fileUriToPath(customIcon);
+        if (localPath && isSafeAbsoluteImagePath(localPath)) {
+            try {
+                if (fs.statSync(localPath).isFile()) {
+                    return { icon: null, color: null, iconPath: localPath };
+                }
+            } catch {
+                // Referenced file gone/unreadable -> fall through to .directory.
+            }
+        }
+        // metadata::custom-icon set but unusable -> still allow custom-icon-name?
+        // Nautilus gives precedence to custom-icon, but an invalid file should
+        // not block the themed-name fallback below.
+    }
+
+    if (customIconName) {
+        return resolveIconValue(customIconName);
+    }
+
+    return null;
+}
+
+/**
+ * Extract `metadata::custom-icon` and `metadata::custom-icon-name` from `gio info` output.
+ * @param {string} output
+ * @returns {{ customIcon: string | null, customIconName: string | null }}
+ */
+function parseGioInfoMetadata(output) {
+    let customIcon = null;
+    let customIconName = null;
+
+    for (const rawLine of String(output || "").split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const match = line.match(/^metadata::(custom-icon(?:-name)?):\s*(.+?)\s*$/);
+        if (!match) continue;
+        const value = match[2].trim();
+        if (!value) continue;
+        if (match[1] === "custom-icon") customIcon = value;
+        else customIconName = value;
+    }
+
+    return { customIcon, customIconName };
+}
+
+/**
+ * Convert `file://` URI (as stored by Nautilus) to a local absolute path.
+ * @param {string} uri
+ * @returns {string | null}
+ */
+function fileUriToPath(uri) {
+    const value = String(uri || "").trim();
+    if (!value.startsWith("file://")) return null;
+    try {
+        if (typeof URL !== "undefined" && URL.canParse && URL.canParse(value)) {
+            const url = new URL(value);
+            if (url.protocol !== "file:") return null;
+            return decodeURIComponent(url.pathname);
+        }
+        let rest = value.slice("file://".length);
+        if (rest.startsWith("localhost/")) rest = rest.slice("localhost".length);
+        if (!rest.startsWith("/")) rest = `/${rest}`;
+        return decodeURIComponent(rest.split("?")[0].split("#")[0]);
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -159,24 +270,37 @@ function parseDirectoryFile(filePath) {
         const iconValue = extractDesktopEntryIcon(text);
         if (!iconValue) return emptyDescriptor();
 
-        if (path.isAbsolute(iconValue)) {
-            if (!isSafeAbsoluteImagePath(iconValue)) return emptyDescriptor();
-            return { icon: null, color: null, iconPath: iconValue };
-        }
-
-        if (iconValue.startsWith("folder-")) {
-            return {
-                icon: "folder",
-                color: sanitizeColorName(iconValue.slice("folder-".length)),
-                iconPath: null,
-            };
-        }
-
-        return { icon: iconValue, color: null, iconPath: null };
+        return resolveIconValue(iconValue) || emptyDescriptor();
     } catch (error) {
         if (pluginApi?.log) pluginApi.log("Failed to parse .directory", filePath, error?.message || error);
         return emptyDescriptor();
     }
+}
+
+/**
+ * Resolve a `.directory` Icon value or Nautilus `custom-icon-name` to a descriptor.
+ * Returns null when the value is empty/invalid.
+ * @param {string} iconValue
+ * @returns {{ icon: string | null, color: string | null, iconPath: string | null } | null}
+ */
+function resolveIconValue(iconValue) {
+    const value = String(iconValue || "").trim();
+    if (!value) return null;
+
+    if (path.isAbsolute(value)) {
+        if (!isSafeAbsoluteImagePath(value)) return null;
+        return { icon: null, color: null, iconPath: value };
+    }
+
+    if (value.startsWith("folder-")) {
+        return {
+            icon: "folder",
+            color: sanitizeColorName(value.slice("folder-".length)),
+            iconPath: null,
+        };
+    }
+
+    return { icon: value, color: null, iconPath: null };
 }
 
 /**

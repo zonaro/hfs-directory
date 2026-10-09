@@ -1,14 +1,28 @@
 # hfs-directory
 
-A plugin for [Rejetto HFS](https://github.com/rejetto/hfs) that reads `.directory` files to customize folder icons in the web interface.
+A plugin for [Rejetto HFS](https://github.com/rejetto/hfs) that customizes folder icons in the web interface using Nautilus custom icons and `.directory` files.
 
 ## Overview
 
-This plugin allows you to customize the appearance of folders displayed in HFS frontend by creating simple `.directory` configuration files within each folder. You can:
+Hierarchy (first hit wins): **Nautilus custom icon → `.directory` → default folder icon**.
+
+This plugin allows you to customize the appearance of folders displayed in HFS frontend:
+
+- **Nautilus custom icons** – set a custom icon on a folder in GNOME Files (Nautilus) and HFS shows exactly the same icon file (via `metadata::custom-icon` / `metadata::custom-icon-name`)
+- **Use custom folder colors** by specifying a color name in `.directory` (e.g., `folder-green`, `folder-blue`)
 
 - **Use custom folder colors** by specifying a color name (e.g., `folder-green`, `folder-blue`)
 - **Use custom folder icons** by providing an absolute path to an image file (e.g., `/path/to/icon.ico`)
 - **Use HFS system icons** by specifying a known icon name (e.g., `folder`, `file`, `search`)
+
+### Nautilus custom icons
+
+Right-click a folder in GNOME Files → Properties → click the folder icon → choose a custom image. The plugin reads the same setting via `gio info`:
+
+- `metadata::custom-icon` (`file:///path/to/icon.png`) → served as-is, exactly the same file Nautilus shows
+- `metadata::custom-icon-name` (e.g., `folder-music`) → resolved like a `.directory` `Icon=` value (`folder-*` gives a colored folder, otherwise a system icon name)
+
+If no Nautilus icon is set (or the referenced file is missing/unreadable), the plugin falls back to `.directory`. Requires the `gio` binary on the HFS host and a filesystem that supports GVFS metadata; otherwise `.directory` is used silently.
 
 ## Syntax
 
@@ -77,9 +91,10 @@ Common icon names: `folder`, `file`, `search`, `download`, `upload`, etc.
 
 ### Backend (plugin.js)
 
-1. **Reads `.directory` file** – When a folder is listed, the plugin looks for a `.directory` file in that folder
-2. **Parses the INI content** – Extracts the `Icon` value from the `[Desktop Entry]` section
-3. **Resolves the icon** – Based on the value:
+1. **Checks Nautilus first** – Runs `gio info -a metadata::custom-icon,metadata::custom-icon-name` on the folder and resolves the result (file URI → served icon file; theme name → same rules as `.directory`)
+2. **Reads `.directory` file** – When no Nautilus icon applies, looks for a `.directory` file in that folder
+3. **Parses the INI content** – Extracts the `Icon` value from the `[Desktop Entry]` section
+4. **Resolves the icon** – Based on the value:
    - If it's a `folder-*` name → sets icon to "folder" + color metadata
    - If it's an absolute path → validates and tokenizes it for secure serving
    - Otherwise → uses the value as a system icon name
@@ -147,6 +162,7 @@ After creating these files, refresh the HFS web interface and the folders will d
 
 ## Features
 
+- ✅ **Nautilus parity** – A custom folder icon set in Nautilus shows exactly the same image in HFS
 - ✅ **No restart required** – Changes take effect immediately (within cache TTL)
 - ✅ **Lightweight** – Uses in-memory cache to minimize disk reads
 - ✅ **Secure** – Absolute icon paths are validated and served through a tokenized route
@@ -194,7 +210,8 @@ Even with hundreds of folders, the plugin performs efficiently:
 
 ### Icon doesn't appear
 
-1. Verify the `.directory` file exists in the correct folder
+1. If you set the icon in Nautilus: verify `gio info -a metadata::custom-icon,metadata::custom-icon-name /path/to/folder` shows the value, that `gio` exists on the HFS host, and that the referenced image file exists and is readable (some filesystems like `tmpfs` don't support GVFS metadata)
+2. Verify the `.directory` file exists in the correct folder
 2. Check that the `[Desktop Entry]` section is present
 3. Ensure the `Icon=` line has no leading spaces
 4. If using an absolute path, verify the file exists and is readable
