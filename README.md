@@ -4,7 +4,7 @@ A plugin for [Rejetto HFS](https://github.com/rejetto/hfs) that customizes folde
 
 ## Overview
 
-Hierarchy (first hit wins): **Nautilus custom icon → `.directory` → default folder icon**.
+Hierarchy (first hit wins): **Nautilus export sidecar → Nautilus (`gio`) → `.directory` → default folder icon**.
 
 This plugin allows you to customize the appearance of folders displayed in HFS frontend:
 
@@ -22,7 +22,30 @@ Right-click a folder in GNOME Files → Properties → click the folder icon →
 - `metadata::custom-icon` (`file:///path/to/icon.png`) → served as-is, exactly the same file Nautilus shows
 - `metadata::custom-icon-name` (e.g., `folder-music`) → resolved like a `.directory` `Icon=` value (`folder-*` gives a colored folder, otherwise a system icon name)
 
-If no Nautilus icon is set (or the referenced file is missing/unreadable), the plugin falls back to `.directory`. Requires the `gio` binary on the HFS host and a filesystem that supports GVFS metadata; otherwise `.directory` is used silently.
+If no Nautilus icon is set (or the referenced file is missing/unreadable), the plugin falls back to `.directory`.
+
+### Nautilus when HFS runs as another user (sidecar exporter)
+
+GVFS metadata lives in the desktop user's store (`~/.local/share/gvfs-metadata`) and custom icon files often sit under a `0700 $HOME` — an HFS process running as e.g. `hfs` can see neither. For exact-icon parity in that setup, run the exporter as the desktop user:
+
+```bash
+./exporter/install.sh
+```
+
+It installs a systemd **user** timer (`hfs-directory-export.timer`, every 3 min) that scans `$HFS_EXPORT_ROOTS` (default `/mnt/GIT`, depth `$HFS_EXPORT_DEPTH`, default 4) with `gio info` and mirrors each custom icon byte-identically into the world-readable cache `$HFS_EXPORT_CACHE` (default `/var/tmp/hfs-directory`) plus a `manifest.json`. The plugin reads that manifest first — no root needed anywhere.
+
+Env overrides: `HFS_EXPORT_ROOTS` (colon-separated), `HFS_EXPORT_DEPTH`, `HFS_EXPORT_CACHE`, `HFS_EXPORT_GIO_TIMEOUT`. The plugin side honors `HFS_DIRECTORY_CACHE` (same default) for the cache dir location.
+
+### Required file permissions
+
+HFS must be able to **read** the `.directory` files and any referenced icon files (it usually runs as another user). Dolphin/file managers often create them as `600`, which makes the plugin silently fall back to the default icon (a permission warning is logged once per path in the HFS log). Fix:
+
+```bash
+chmod 644 /path/to/folder/.directory
+chmod 644 /path/to/icon.png   # if .directory points at a custom file
+```
+
+Parent directories need the traverse (`+x`) bit for others, which is the normal case.
 
 ## Syntax
 
@@ -60,6 +83,8 @@ Icon=folder-green
 - `folder-gray` – Gray folder
 - `folder-violet` – Violet folder
 - `folder-pink` – Pink folder
+- `folder-cyan` – Cyan folder
+- `folder-git` – Git-orange folder
 
 #### 2. Custom Icon Files
 
@@ -91,8 +116,9 @@ Common icon names: `folder`, `file`, `search`, `download`, `upload`, etc.
 
 ### Backend (plugin.js)
 
-1. **Checks Nautilus first** – Runs `gio info -a metadata::custom-icon,metadata::custom-icon-name` on the folder and resolves the result (file URI → served icon file; theme name → same rules as `.directory`)
-2. **Reads `.directory` file** – When no Nautilus icon applies, looks for a `.directory` file in that folder
+1. **Checks the Nautilus export sidecar first** – Reads `manifest.json` from the exporter cache (exact mirrored icon file, or theme name resolved like a `.directory` `Icon=`)
+2. **Checks Nautilus directly** – Runs `gio info -a metadata::custom-icon,metadata::custom-icon-name` on the folder (covers setups where HFS runs as the desktop user)
+3. **Reads `.directory` file** – When no Nautilus icon applies, looks for a `.directory` file in that folder
 3. **Parses the INI content** – Extracts the `Icon` value from the `[Desktop Entry]` section
 4. **Resolves the icon** – Based on the value:
    - If it's a `folder-*` name → sets icon to "folder" + color metadata
@@ -210,8 +236,10 @@ Even with hundreds of folders, the plugin performs efficiently:
 
 ### Icon doesn't appear
 
-1. If you set the icon in Nautilus: verify `gio info -a metadata::custom-icon,metadata::custom-icon-name /path/to/folder` shows the value, that `gio` exists on the HFS host, and that the referenced image file exists and is readable (some filesystems like `tmpfs` don't support GVFS metadata)
-2. Verify the `.directory` file exists in the correct folder
+1. If you set the icon in Nautilus and HFS runs as another user: install `./exporter/install.sh` as the desktop user and check `/var/tmp/hfs-directory/manifest.json` contains the folder
+2. If you set the icon in Nautilus (same user): verify `gio info -a metadata::custom-icon,metadata::custom-icon-name /path/to/folder` shows the value, that `gio` exists on the HFS host, and that the referenced image file exists and is readable (some filesystems like `tmpfs` don't support GVFS metadata)
+3. Check the HFS log for `permission denied for HFS user` — `.directory`/icon files must be readable by the HFS user (`chmod 644`)
+4. Verify the `.directory` file exists in the correct folder
 2. Check that the `[Desktop Entry]` section is present
 3. Ensure the `Icon=` line has no leading spaces
 4. If using an absolute path, verify the file exists and is readable

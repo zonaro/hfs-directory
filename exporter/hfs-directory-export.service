@@ -1,0 +1,14 @@
+[Unit]
+Description=Mirror Nautilus custom folder icons for hfs-directory plugin
+After=network.target
+
+[Service]
+Type=oneshot
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=HFS_EXPORT_ROOTS=/mnt/GIT
+Environment=HFS_EXPORT_DEPTH=4
+Environment=HFS_EXPORT_CACHE=/var/tmp/hfs-directory
+ExecStart=@NODE@ @PLUGIN_DIR@/exporter/export-nautilus-icons.cjs
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically mirror Nautilus custom folder icons for hfs-directory
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

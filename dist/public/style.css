@@ -36,3 +36,11 @@
 .hfs-directory-folder-icon.hfs-directory-color-pink {
     color: #ad1457;
 }
+
+.hfs-directory-folder-icon.hfs-directory-color-cyan {
+    color: #00acc1;
+}
+
+.hfs-directory-folder-icon.hfs-directory-color-git {
+    color: #f05032;
+}

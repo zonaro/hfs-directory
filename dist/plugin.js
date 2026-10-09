@@ -5,7 +5,11 @@
  *
  * Reads Nautilus custom icons (GIO metadata) and `.directory` files from
  * folders and customizes folder icons in HFS list.
- * Hierarchy (first hit wins): Nautilus -> .directory -> default.
+ * Hierarchy (first hit wins): Nautilus export sidecar -> Nautilus (gio) -> .directory -> default.
+ * The sidecar exists because HFS often runs as another user (e.g. `hfs`),
+ * which cannot see the desktop user's GVFS metadata store nor files under a
+ * 0700 $HOME. A user-level exporter (see exporter/) mirrors the icons into a
+ * world-readable cache dir; direct `gio` lookup still covers same-user setups.
  * Supported .directory syntax:
  * [Desktop Entry]
  * Icon=/absolute/path/to/icon.ico
@@ -22,6 +26,9 @@ const DIRECTORY_FILE_NAME = ".directory";
 const CACHE_TTL_MS = 30 * 1000;
 const GIO_TIMEOUT_MS = 2000;
 const GIO_ATTRIBUTES = "metadata::custom-icon,metadata::custom-icon-name";
+const SIDECAR_ENV_VAR = "HFS_DIRECTORY_CACHE";
+const SIDECAR_DEFAULT_DIR = "/var/tmp/hfs-directory";
+const SIDECAR_MANIFEST = "manifest.json";
 const ALLOWED_IMAGE_EXTENSIONS = new Set([
     ".png",
     ".jpg",
@@ -50,8 +57,14 @@ const folderCache = new Map();
 /** @type {Map<string, { iconPath: string, expiresAt: number }>} */
 const iconTokenCache = new Map();
 
+/** @type {{ expiresAt: number, data: Record<string, { icon?: string, name?: string }> } | null} */
+let sidecarCache = null;
+
+/** Warn once per path about unreadable `.directory` files (cleared on unload). */
+const warnedPaths = new Set();
+
 exports.description = "Use Nautilus custom icons and .directory to customize folder icons";
-exports.version = 2;
+exports.version = 3;
 exports.apiRequired = 12.97;
 exports.frontend_js = "main.js";
 exports.frontend_css = "style.css";
@@ -142,11 +155,14 @@ function onDirEntry({ entry, node }) {
 function unload() {
     folderCache.clear();
     iconTokenCache.clear();
+    sidecarCache = null;
+    warnedPaths.clear();
     gioAvailable = null;
 }
 
 /**
- * Read (or cache-hit) folder icon with hierarchy: Nautilus -> .directory -> default.
+ * Read (or cache-hit) folder icon.
+ * Hierarchy (first hit wins): sidecar -> gio -> .directory -> default.
  * @param {string} folderPath
  * @returns {{ icon: string | null, color: string | null, iconPath: string | null }}
  */
@@ -155,9 +171,92 @@ function getFolderIconDescriptor(folderPath) {
     const cached = folderCache.get(folderPath);
     if (cached && cached.expiresAt > now) return cached.result;
 
-    const result = getNautilusIconDescriptor(folderPath) || parseDirectoryFile(path.join(folderPath, DIRECTORY_FILE_NAME));
+    const result =
+        getSidecarIconDescriptor(folderPath) ||
+        getNautilusIconDescriptor(folderPath) ||
+        parseDirectoryFile(path.join(folderPath, DIRECTORY_FILE_NAME));
     folderCache.set(folderPath, { result, expiresAt: now + CACHE_TTL_MS });
     return result;
+}
+
+/**
+ * Read Nautilus custom icon mirrored by the user-level exporter.
+ * Returns a descriptor on hit, or null to fall through.
+ * @param {string} folderPath
+ * @returns {{ icon: string | null, color: string | null, iconPath: string | null } | null}
+ */
+function getSidecarIconDescriptor(folderPath) {
+    const entries = loadSidecarEntries();
+    if (!entries) return null;
+    const record = entries[folderPath];
+    if (!record || typeof record !== "object") return null;
+
+    if (typeof record.icon === "string" && record.icon) {
+        const iconPath = resolveSidecarFile(record.icon);
+        if (iconPath) {
+            try {
+                if (fs.statSync(iconPath).isFile()) {
+                    return { icon: null, color: null, iconPath };
+                }
+            } catch {
+                // Stale entry (exporter prunes on next run) -> fall through.
+            }
+        }
+    }
+
+    if (typeof record.name === "string" && record.name.trim()) {
+        return resolveIconValue(record.name);
+    }
+
+    return null;
+}
+
+/**
+ * Load (or cache-hit) the exporter manifest entries.
+ * @returns {Record<string, { icon?: string, name?: string }> | null}
+ */
+function loadSidecarEntries() {
+    const now = Date.now();
+    if (sidecarCache && sidecarCache.expiresAt > now) return sidecarCache.data;
+
+    let data = null;
+    try {
+        const raw = fs.readFileSync(path.join(sidecarDir(), SIDECAR_MANIFEST), "utf8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.entries === "object" && parsed.entries) {
+            data = parsed.entries;
+        }
+    } catch {
+        data = null;
+    }
+
+    sidecarCache = { data, expiresAt: now + CACHE_TTL_MS };
+    return data;
+}
+
+/**
+ * Resolve a manifest-relative icon file to an absolute path contained in the cache dir.
+ * @param {string} rel
+ * @returns {string | null}
+ */
+function resolveSidecarFile(rel) {
+    try {
+        const dir = sidecarDir();
+        const resolved = path.resolve(dir, String(rel || ""));
+        if (resolved !== dir && !resolved.startsWith(`${dir}${path.sep}`)) return null;
+        if (!isSafeAbsoluteImagePath(resolved)) return null;
+        return resolved;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * @returns {string}
+ */
+function sidecarDir() {
+    const override = typeof process.env[SIDECAR_ENV_VAR] === "string" ? process.env[SIDECAR_ENV_VAR].trim() : "";
+    return override || SIDECAR_DEFAULT_DIR;
 }
 
 /**
@@ -264,9 +363,21 @@ function fileUriToPath(uri) {
  * @returns {{ icon: string | null, color: string | null, iconPath: string | null }}
  */
 function parseDirectoryFile(filePath) {
+    let text;
     try {
-        if (!fs.existsSync(filePath)) return emptyDescriptor();
-        const text = fs.readFileSync(filePath, "utf8");
+        text = fs.readFileSync(filePath, "utf8");
+    } catch (error) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return emptyDescriptor();
+        if ((error?.code === "EACCES" || error?.code === "EPERM") && !warnedPaths.has(filePath)) {
+            warnedPaths.add(filePath);
+            if (pluginApi?.log) pluginApi.log(`Cannot read ${filePath} (permission denied for HFS user). Run: chmod 644 "${filePath}"`);
+        } else if (error?.code !== "EACCES" && error?.code !== "EPERM" && pluginApi?.log) {
+            pluginApi.log("Failed to parse .directory", filePath, error?.message || error);
+        }
+        return emptyDescriptor();
+    }
+
+    try {
         const iconValue = extractDesktopEntryIcon(text);
         if (!iconValue) return emptyDescriptor();
 
