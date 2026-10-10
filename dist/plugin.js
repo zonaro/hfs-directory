@@ -65,7 +65,7 @@ let sidecarCache = null;
 const warnedPaths = new Set();
 
 exports.description = "Use Nautilus custom icons and .directory to customize folder icons";
-exports.version = 4;
+exports.version = 5;
 exports.apiRequired = 12.97;
 exports.frontend_js = "main.js";
 exports.frontend_css = "style.css";
@@ -371,7 +371,7 @@ function parseDirectoryFile(filePath) {
         if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return emptyDescriptor();
         if ((error?.code === "EACCES" || error?.code === "EPERM") && !warnedPaths.has(filePath)) {
             warnedPaths.add(filePath);
-            if (pluginApi?.log) pluginApi.log(`Cannot read ${filePath} (permission denied for HFS user). Run: chmod 644 "${filePath}"`);
+            if (pluginApi?.log) pluginApi.log(unreadableHint(filePath));
         } else if (error?.code !== "EACCES" && error?.code !== "EPERM" && pluginApi?.log) {
             pluginApi.log("Failed to parse .directory", filePath, error?.message || error);
         }
@@ -386,6 +386,22 @@ function parseDirectoryFile(filePath) {
     } catch (error) {
         if (pluginApi?.log) pluginApi.log("Failed to parse .directory", filePath, error?.message || error);
         return emptyDescriptor();
+    }
+}
+
+/**
+ * Build an actionable hint for an unreadable `.directory`.
+ * EACCES with a listable parent means the file itself is locked;
+ * EACCES with a locked parent (e.g. 0700 lost+found) means traversal fails.
+ * @param {string} filePath
+ * @returns {string}
+ */
+function unreadableHint(filePath) {
+    try {
+        fs.readdirSync(path.dirname(filePath));
+        return `Cannot read ${filePath} (permission denied for HFS user). Run: chmod 644 "${filePath}"`;
+    } catch {
+        return `Cannot access ${filePath} (parent folder not traversable by HFS user). Run: chmod o+x "${path.dirname(filePath)}"`;
     }
 }
 

@@ -241,7 +241,7 @@ Even with hundreds of folders, the plugin performs efficiently:
 
 1. If you set the icon in Nautilus and HFS runs as another user: install `./exporter/install.sh` as the desktop user and check `/var/tmp/hfs-directory/manifest.json` contains the folder
 2. If you set the icon in Nautilus (same user): verify `gio info -a metadata::custom-icon,metadata::custom-icon-name /path/to/folder` shows the value, that `gio` exists on the HFS host, and that the referenced image file exists and is readable (some filesystems like `tmpfs` don't support GVFS metadata)
-3. Check the HFS log for `permission denied for HFS user` — `.directory`/icon files must be readable by the HFS user (`chmod 644`)
+3. Check the HFS log for `permission denied for HFS user` — `.directory`/icon files must be readable by the HFS user (`chmod 644`); if the parent folder itself isn't traversable (e.g. `lost+found` with `700`), the log tells you to add traverse instead (`chmod o+x`)
 4. Verify the `.directory` file exists in the correct folder
 2. Check that the `[Desktop Entry]` section is present
 3. Ensure the `Icon=` line has no leading spaces
